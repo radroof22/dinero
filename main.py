@@ -5,6 +5,7 @@ import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
 from pathlib import Path
+import yfinance as yf
 
 st.set_page_config(page_title="Portfolio Dashboard", layout="wide")
 
@@ -136,7 +137,44 @@ if not portfolio_frames:
 
 portfolio_df = pd.concat(portfolio_frames, ignore_index=True)
 
-# Derived columns
+# -------------------------------------------------
+# UPDATE PRICES WITH YAHOO FINANCE
+# -------------------------------------------------
+
+@st.cache_data(show_spinner="Fetching latest prices from Yahoo Finance …")
+def fetch_latest_prices(symbols: list[str]) -> dict[str, float]:
+    """Return a mapping of symbol → latest market price using yfinance.
+
+    Falls back to the last close if real-time quote is unavailable.
+    """
+    prices: dict[str, float] = {}
+    for sym in symbols:
+        if sym.upper() == "CASH":  # skip literal cash symbol just in case
+            continue
+        try:
+            ticker = yf.Ticker(sym)
+            price = ticker.fast_info.get("last_price") if hasattr(ticker, "fast_info") else None
+            if price is None:
+                price = ticker.info.get("regularMarketPrice")
+            if price is None:
+                hist = ticker.history(period="1d")
+                if not hist.empty:
+                    price = float(hist["Close"].iloc[-1])
+            if price is not None and price > 0:
+                prices[sym] = price
+        except Exception:
+            # ignore individual fetch errors and continue
+            continue
+    return prices
+
+# Map live prices (skip cash rows where price == 1.0)
+live_price_map = fetch_latest_prices(portfolio_df["Symbol"].unique().tolist())
+non_cash_mask = portfolio_df["Current Price"] != 1.0
+portfolio_df.loc[non_cash_mask, "Current Price"] = portfolio_df.loc[non_cash_mask, "Symbol"].map(live_price_map).fillna(
+    portfolio_df.loc[non_cash_mask, "Current Price"]
+)
+
+# Derived columns (recalculate with latest prices)
 portfolio_df["Position Value"] = portfolio_df["Quantity"] * portfolio_df["Current Price"]
 portfolio_df["Cost Basis per Share"] = portfolio_df["Cost Basis Total"] / portfolio_df["Quantity"]
 portfolio_df["PnL"] = (
@@ -176,6 +214,19 @@ display_df['Cost Basis Total'] = display_df['Cost Basis Total'].apply(lambda x: 
 display_df['Position Value'] = display_df['Position Value'].apply(lambda x: f'${x:,.2f}')
 display_df['PnL'] = display_df['PnL'].apply(lambda x: f'{x*100:.2f}%')
 st.dataframe(display_df, height=300)
+
+# ----- NORMALISED (SYMBOL-LEVEL) TABLE -----
+st.subheader("Normalized Positions (Aggregated by Symbol)")
+
+# Prepare a nicely formatted version of portfolio_norm
+display_norm = portfolio_norm.copy()
+for col in ["Current Price", "Cost Basis per Share"]:
+    display_norm[col] = display_norm[col].apply(lambda x: f"${x:,.2f}")
+for col in ["Cost Basis Total", "Position Value"]:
+    display_norm[col] = display_norm[col].apply(lambda x: f"${x:,.2f}")
+display_norm["PnL"] = display_norm["PnL"].apply(lambda x: f"{x*100:.2f}%")
+
+st.dataframe(display_norm, height=300)
 
 # ----- BAR CHART: PnL -----
 with st.container():
