@@ -290,17 +290,51 @@ with col2:
     fig_cb.update_layout(height=400)
     st.plotly_chart(fig_cb, use_container_width=True)
 
-# ----- INVESTED VS CASH -----
-st.subheader("Invested vs Cash (Current Value)")
-fig_ic = px.pie(
-    names=["Invested", "Cash"],
-    values=[invested_value, cash_value],
-    color=["Invested", "Cash"],
-    color_discrete_map={"Invested": "#2ecc71", "Cash": "#3498db"},
-    hole=0.4,
-)
-fig_ic.update_layout(height=400)
-st.plotly_chart(fig_ic, use_container_width=True)
+# ----- INVESTED VS CASH & CASH BY ACCOUNT -----
+col_ic, col_ca = st.columns(2)
+
+# Pie: Invested vs Cash
+with col_ic:
+    st.subheader("Invested vs Cash (Current Value)")
+    fig_ic = px.pie(
+        names=["Invested", "Cash"],
+        values=[invested_value, cash_value],
+        color=["Invested", "Cash"],
+        color_discrete_map={"Invested": "#2ecc71", "Cash": "#3498db"},
+        hole=0.4,
+    )
+    fig_ic.update_layout(height=400)
+    st.plotly_chart(fig_ic, use_container_width=True)
+
+# Bar: Cash by Account (Account Type + Source)
+with col_ca:
+    st.subheader("Cash by Account")
+    cash_df = (
+        portfolio_df[portfolio_df["Current Price"] == 1.0]
+        .groupby(["Account Type", "Source"], as_index=False)["Position Value"].sum()
+    )
+    cash_df["Account"] = cash_df["Account Type"] + " - " + cash_df["Source"]
+
+    # If there is no cash in any account, avoid empty plot
+    if cash_df.empty:
+        st.info("No cash positions detected across accounts.")
+    else:
+        fig_cash = px.bar(
+            cash_df,
+            x="Account",
+            y="Position Value",
+            color="Position Value",
+            color_continuous_scale="Oranges",
+        )
+        fig_cash.update_layout(
+            yaxis_title="Cash ($)",
+            xaxis_title="",
+            xaxis_tickangle=-45,
+            height=400,
+            template="plotly_white",
+            coloraxis_showscale=False,
+        )
+        st.plotly_chart(fig_cash, use_container_width=True)
 
 # ----- KPI METRICS -----
 col_a, col_b = st.columns(2)
