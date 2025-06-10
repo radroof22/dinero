@@ -174,6 +174,39 @@ portfolio_df.loc[non_cash_mask, "Current Price"] = portfolio_df.loc[non_cash_mas
     portfolio_df.loc[non_cash_mask, "Current Price"]
 )
 
+# -------------------------------------------------
+# FETCH DIVIDEND DATA
+# -------------------------------------------------
+
+@st.cache_data(show_spinner="Fetching dividend data …")
+def fetch_dividends(symbols: list[str]) -> dict[str, float]:
+    """Return a mapping of symbol → annual dividend per share (USD).
+
+    Attempts to use forward dividend; falls back to trailing dividend rate.
+    """
+    dividends: dict[str, float] = {}
+    for sym in symbols:
+        if sym.upper() == "CASH":
+            dividends[sym] = 0.0
+            continue
+        try:
+            ticker = yf.Ticker(sym)
+            div = None
+            # Forward dividend
+            div = ticker.info.get("dividendRate") if ticker.info else None
+            if div is None:
+                # Trailing annual dividend
+                div = ticker.info.get("trailingAnnualDividendRate") if ticker.info else None
+            if div is not None and div >= 0:
+                dividends[sym] = float(div)
+        except Exception:
+            continue
+    return dividends
+
+# Attach dividend per share to portfolio_df (0 if unavailable)
+div_map = fetch_dividends(portfolio_df["Symbol"].unique().tolist())
+portfolio_df["Dividend"] = portfolio_df["Symbol"].map(div_map).fillna(0.0)
+
 # Derived columns (recalculate with latest prices)
 portfolio_df["Position Value"] = portfolio_df["Quantity"] * portfolio_df["Current Price"]
 portfolio_df["Cost Basis per Share"] = portfolio_df["Cost Basis Total"] / portfolio_df["Quantity"]
@@ -188,6 +221,7 @@ portfolio_norm = (
         "Cost Basis Total": "sum",
         "Quantity": "sum",
         "Current Price": "first",
+        "Dividend": "first",
     })
     .reset_index()
 )
@@ -196,6 +230,11 @@ portfolio_norm["Cost Basis per Share"] = portfolio_norm["Cost Basis Total"] / po
 portfolio_norm["PnL"] = (
     portfolio_norm["Position Value"] - portfolio_norm["Cost Basis Total"]
 ) / portfolio_norm["Cost Basis Total"]
+
+# Adjusted Yield (Dividend per share divided by cost basis per share)
+portfolio_norm["Adjusted Yield"] = (
+    portfolio_norm["Dividend"] / portfolio_norm["Cost Basis per Share"]
+).replace([np.inf, -np.inf], np.nan)
 
 # CASH / INVESTED SUMMARY
 cash_value = portfolio_norm[portfolio_norm["Current Price"] == 1.0]["Position Value"].sum()
@@ -209,6 +248,8 @@ st.header("Raw Positions")
 # Format price columns with $ and 2 decimal points, PnL as percentage
 display_df = portfolio_df.copy()
 display_df['Current Price'] = display_df['Current Price'].apply(lambda x: f'${x:,.2f}')
+display_df['Dividend'] = display_df['Dividend'].apply(lambda x: f'${x:,.2f}')
+display_df['Current Dividend Yield'] = (portfolio_df['Dividend'].astype(float) / portfolio_df['Current Price'].astype(float)).apply(lambda x: f'{x*100:,.2f}%')
 display_df['Cost Basis per Share'] = display_df['Cost Basis per Share'].apply(lambda x: f'${x:,.2f}')
 display_df['Cost Basis Total'] = display_df['Cost Basis Total'].apply(lambda x: f'${x:,.2f}')
 display_df['Position Value'] = display_df['Position Value'].apply(lambda x: f'${x:,.2f}')
@@ -224,7 +265,11 @@ for col in ["Current Price", "Cost Basis per Share"]:
     display_norm[col] = display_norm[col].apply(lambda x: f"${x:,.2f}")
 for col in ["Cost Basis Total", "Position Value"]:
     display_norm[col] = display_norm[col].apply(lambda x: f"${x:,.2f}")
+display_norm["Dividend"] = display_norm["Dividend"].apply(lambda x: f"${x:,.2f}")
 display_norm["PnL"] = display_norm["PnL"].apply(lambda x: f"{x*100:.2f}%")
+display_norm["Current Dividend Yield"] = (portfolio_norm["Dividend"] / portfolio_norm["Current Price"]).apply(lambda x: f"{x*100:.2f}%")
+
+display_norm["Adjusted Yield"] = display_norm["Adjusted Yield"].apply(lambda x: f"{(x or 0)*100:.2f}%" if pd.notna(x) else "-")
 
 st.dataframe(display_norm, height=300)
 
